@@ -22,7 +22,172 @@ if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
     console.warn('⚠️  Spotify credentials missing (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET). Spotify links will fail.');
 }
 
+
 const queues: Map<string, string[]> = new Map();
+
+/**
+ * A simple responder type so we can share logic between prefix‑commands and slash‑commands.
+ * It’s just a function that sends a string somewhere (message.reply, interaction.editReply, etc.).
+ */
+type Responder = (content: string) => Promise<any>;
+
+/**
+ * Core logic for the “play” request.
+ * Handles: resolving the URL, queueing, connecting, and optionally starting playback.
+ * Re‑used by both the text‑prefix (`!play`) and slash (`/play`) commands so the behaviour is identical.
+ */
+async function processPlayRequest(
+    url: string,
+    voiceChannel: Exclude<import('discord.js').GuildMember['voice']['channel'], null>,
+    guildId: string,
+    respond: Responder
+): Promise<void> {
+    // ---------------- main logic ----------------
+    const first = await resolveFirstTrack(url);
+
+    // ── If the first track itself is unplayable … ──────────────────
+    if (!first) {
+        const playable = await resolveTracks(url);
+        if (playable.length === 0) {
+            await respond('⚠️  Couldn\'t resolve that link to a playable track.');
+            return;
+        }
+
+        // push whole list to queue
+        let q = queues.get(guildId);
+        if (!q) { q = []; queues.set(guildId, q); }
+        q.push(...playable);
+
+        // ensure / reuse a voice connection then start playback
+        let connection =
+            player.subscribers.find(sub => sub.connection?.joinConfig.guildId === guildId)?.connection;
+        if (!connection) {
+            connection = joinVoiceChannel({
+                channelId: voiceChannel.id,
+                guildId: guildId,
+                adapterCreator: voiceChannel.guild.voiceAdapterCreator
+            });
+            try {
+                await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+            } catch {
+                await respond('⚠️  Couldn\'t join the voice channel.');
+                return;
+            }
+        }
+        void playFromQueue(connection);
+        await respond(`📥 Added ${playable.length} track(s) to the queue (first item was unplayable).`);
+        return;
+    }
+
+    // ── We have a playable "first" track ───────────────────────────
+    let q = queues.get(guildId);
+    if (!q) { q = []; queues.set(guildId, q); }
+
+    // enqueue remainder of playlist/album in background
+    (async () => {
+        const rest = await resolveTracks(url);
+        if (rest.length && rest[0] === first) rest.shift();
+        if (rest.length) q.push(...rest);
+    })();
+
+    const existingConn =
+        player.subscribers.find(sub => sub.connection?.joinConfig.guildId === guildId)?.connection;
+
+    if (player.state.status === AudioPlayerStatus.Idle) {
+        let connection = existingConn;
+        if (!connection) {
+            connection = joinVoiceChannel({
+                channelId: voiceChannel.id,
+                guildId: guildId,
+                adapterCreator: voiceChannel.guild.voiceAdapterCreator
+            });
+            await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+            connection.subscribe(player);
+        }
+        const resource = await createResource(first);
+        player.play(resource);
+        await respond(`🎶 Now playing: ${first}`);
+    } else {
+        q.push(first);
+        await respond('📥 Added to queue.');
+    }
+}
+
+/**
+ * Format the current queue for display (shows up to 20 upcoming tracks).
+ */
+async function formatQueue(guildId: string): Promise<string> {
+    const q = queues.get(guildId) ?? [];
+    if (q.length === 0) return '📭 The queue is empty.';
+    const lines: string[] = [];
+    for (let i = 0; i < Math.min(q.length, 20); i++) {
+        const url = q[i];
+        let title = url;
+        let author = '';
+        try {
+            if (/open\.spotify\.com/.test(url)) {
+                const sp = await playdl.spotify(url);
+                title = sp.name;
+                author = sp.artists.join(', ');
+            } else {
+                const info = await playdl.video_basic_info(url);
+                title = info.video_details.title;
+                author = info.video_details.author?.name || '';
+            }
+        } catch {
+            // leave title as URL on error
+        }
+        lines.push(`${i + 1}. **${title}** by ${author}\n\`${url}\``);
+    }
+    if (q.length > 20) {
+        lines.push(`…and ${q.length - 20} more`);
+    }
+    return '📜 **Current queue:**\n' + lines.join('\n');
+}
+
+/**
+ * Quickly resolve only the first playable track from a URL.
+ * Used to start playback immediately; the rest of the playlist/album
+ * is fetched later in the background.
+ */
+async function resolveFirstTrack(url: string): Promise<string | null> {
+    // YouTube playlist – get first video
+    if (/youtube\.com\/.*[?&]list=/.test(url)) {
+        try {
+            const pl = await playdl.playlist_info(url, { incomplete: true });
+            const vids = await pl.all_videos();
+            return vids.length ? vids[0].url : null;
+        } catch {
+            return null;
+        }
+    }
+
+    // Single YouTube video
+    if (/youtu\.?be|youtube\.com/.test(url)) return url;
+
+    // Spotify
+    if (/open\.spotify\.com/.test(url)) {
+        try {
+            const sp = await playdl.spotify(url);
+            if (sp.type === 'track') {
+                const sr = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
+                return sr.length ? sr[0].url : null;
+            }
+            // playlist / album – just use the first already‑present track blob
+            const firstTrack = sp.tracks[0] ?? null;
+            if (firstTrack) {
+                const sr = await playdl.search(`${firstTrack.name} ${firstTrack.artists[0].name}`, { limit: 1 });
+                return sr.length ? sr[0].url : null;
+            }
+        } catch {
+            /* ignore */
+        }
+    }
+
+    // Fallback – never return raw Spotify links (we can't stream them)
+    if (/open\.spotify\.com/.test(url)) return null;
+    return url || null;
+}
 
 /**
  * Resolve the given URL into one or more playable YouTube links.
@@ -53,18 +218,20 @@ async function resolveTracks(url: string): Promise<string[]> {
             const sp = await playdl.spotify(url);
             // Single track
             if (sp.type === 'track') {
-                const search = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
-                return search.length ? [search[0].url] : [];
+                try {
+                    const search = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
+                    return search.length ? [search[0].url] : [];
+                } catch (err) {
+                    console.error('Track search failed, skipping:', sp.name, err);
+                    return [];
+                }
             }
             // Playlist / Album
             if (sp.type === 'playlist' || sp.type === 'album') {
+                // Load the playlist lazily: just queue the raw Spotify URLs.
+                // They will be resolved to YouTube one‑by‑one in createResource().
                 const all = await sp.all_tracks();
-                const tracks: string[] = [];
-                for (const t of all) {
-                    const sr = await playdl.search(`${t.name} ${t.artists[0].name}`, { limit: 1 });
-                    if (sr.length) tracks.push(sr[0].url);
-                }
-                return tracks;
+                return all.map(t => t.url as string).filter(Boolean);
             }
         } catch (err) {
             console.error('Spotify resolve error:', err);
@@ -77,6 +244,19 @@ async function resolveTracks(url: string): Promise<string[]> {
 }
 
 async function createResource(url: string) {
+    // ─── Spotify fallback ───────────────────────────────────────
+    // Never stream directly from Spotify; instead search YouTube/SoundCloud
+    if (/open\.spotify\.com/.test(url)) {
+        try {
+            const sp = await playdl.spotify(url);
+            const sr = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
+            if (sr.length) {
+                // recursively create a resource from the fallback URL
+                return await createResource(sr[0].url);
+            }
+        } catch {/* fall through */}
+        throw new Error('Direct Spotify streaming is not supported and no fallback was found.');
+    }
     if (/youtu\.?be/.test(url)) {
         const ytStream = ytdl(url, {
             filter: 'audioonly',
@@ -90,6 +270,34 @@ async function createResource(url: string) {
             inputType: stream.type === 'opus' ? StreamType.Opus : StreamType.Arbitrary
         });
     }
+}
+
+/**
+ * Attempt to play the next resolvable track in the queue.
+ * Skips any entries that fail to create an audio resource.
+ */
+async function playFromQueue(connection: import('@discordjs/voice').VoiceConnection) {
+    const guildId = connection.joinConfig.guildId;
+    const q = queues.get(guildId);
+    if (!q || q.length === 0) {
+        connection.destroy();
+        return;
+    }
+
+    while (q.length) {
+        const nextUrl = q.shift()!;
+        try {
+            const resource = await createResource(nextUrl);
+            connection.subscribe(player);
+            player.play(resource);
+            return; // success
+        } catch (err) {
+            console.error('⤼  Failed to play track, skipping:', nextUrl, err);
+        }
+    }
+
+    // No playable tracks remain
+    connection.destroy();
 }
 
 const client = new Client({
@@ -106,24 +314,8 @@ const player = createAudioPlayer();
 // Destroy the connection when the player becomes idle.
 player.on(AudioPlayerStatus.Idle, () => {
     const connection = player.subscribers.find(sub => sub.connection)?.connection;
-    if (!connection) return;
-
-    const guildId = connection.joinConfig.guildId;
-    const q = queues.get(guildId);
-
-    if (q && q.length) {
-        const nextUrl = q.shift()!;
-        (async () => {
-            try {
-                const resource = await createResource(nextUrl);
-                player.play(resource);
-            } catch (err) {
-                console.error(err);
-                connection.destroy();
-            }
-        })();
-    } else {
-        connection.destroy();
+    if (connection) {
+        void playFromQueue(connection);
     }
 });
 
@@ -152,40 +344,34 @@ client.on(Events.MessageCreate, async message => {
         }
 
         try {
-            const tracks = await resolveTracks(url);
-            if (!tracks.length) {
-                await message.reply('⚠️  Couldn\'t resolve that link to a playable track.');
-                return;
-            }
-
-            const guildId = voiceChannel.guild.id;
-            let q = queues.get(guildId);
-            if (!q) { q = []; queues.set(guildId, q); }
-
-            // If nothing is playing and queue is empty, start the first track immediately
-            if (player.state.status === AudioPlayerStatus.Idle && q.length === 0) {
-                const first = tracks.shift()!;
-                const resource = await createResource(first);
-
-                const connection = joinVoiceChannel({
-                    channelId: voiceChannel.id,
-                    guildId: guildId,
-                    adapterCreator: voiceChannel.guild.voiceAdapterCreator
-                });
-
-                await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-                connection.subscribe(player);
-                player.play(resource);
-
-                if (tracks.length) q.push(...tracks);
-                await message.reply(`🎶 Now playing: ${first}${tracks.length ? ` (+${tracks.length} more in queue)` : ''}`);
-            } else {
-                q.push(...tracks);
-                await message.reply(`📥 Added ${tracks.length} track${tracks.length > 1 ? 's' : ''} to queue (#${q.length})`);
-            }
+            await processPlayRequest(
+                url,
+                voiceChannel,
+                voiceChannel.guild.id,
+                msg => message.reply(msg)
+            );
         } catch (err) {
             console.error(err);
-            await message.reply('⚠️  I couldn\'t play that track.');
+            await message.reply('⚠️  Skipping unplayable track.');
+            const conn = player.subscribers.find(sub => sub.connection?.joinConfig.guildId === message.guild?.id)?.connection;
+            if (conn) void playFromQueue(conn);
+        }
+    }
+    else if (message.content === '!queue') {
+        const gid = message.guild?.id;
+        if (gid) {
+            await message.reply(await formatQueue(gid));
+        } else {
+            await message.reply('⚠️  I can\'t determine the guild.');
+        }
+    }
+    else if (message.content === '!clearqueue') {
+        const gid = message.guild?.id;
+        if (gid) {
+            queues.set(gid, []);
+            await message.reply('🗑️  Cleared the queue.');
+        } else {
+            await message.reply('⚠️  I can\'t determine the guild.');
         }
     }
     else if (message.content === '!pause') {
@@ -247,45 +433,50 @@ client.on(Events.InteractionCreate, async interaction  => {
         const url = interaction.options.getString('url', true);
 
         if (!interaction.member || !('voice' in interaction.member) || !interaction.member.voice.channel) {
-            await interaction.reply({ content: '❌ You need to join a voice channel first.', ephemeral: true });
+            // Early exit: only to the invoker, use flags for ephemeral
+            await interaction.reply({ content: '❌ You need to join a voice channel first.', flags: 1 << 6 });
             return;
         }
         const voiceChannel = interaction.member.voice.channel;
 
+        // Defer to buy time for potentially long Spotify → YouTube lookups
+        await interaction.deferReply();
+
         try {
-            const tracks = await resolveTracks(url);
-            if (!tracks.length) {
-                await interaction.reply({ content: '⚠️  Couldn\'t resolve that link to a playable track.', ephemeral: true });
-                return;
-            }
-
-            const guildId = voiceChannel.guild.id;
-            let q = queues.get(guildId);
-            if (!q) { q = []; queues.set(guildId, q); }
-
-            if (player.state.status === AudioPlayerStatus.Idle && q.length === 0) {
-                const first = tracks.shift()!;
-                const resource = await createResource(first);
-
-                const connection = joinVoiceChannel({
-                    channelId: voiceChannel.id,
-                    guildId: guildId,
-                    adapterCreator: voiceChannel.guild.voiceAdapterCreator
-                });
-
-                await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-                connection.subscribe(player);
-                player.play(resource);
-
-                if (tracks.length) q.push(...tracks);
-                await interaction.reply(`🎶 Now playing: ${first}${tracks.length ? ` (+${tracks.length} more in queue)` : ''}`);
-            } else {
-                q.push(...tracks);
-                await interaction.reply(`📥 Added ${tracks.length} track${tracks.length > 1 ? 's' : ''} to queue (#${q.length})`);
-            }
+            await processPlayRequest(
+                url,
+                voiceChannel,
+                voiceChannel.guild.id,
+                msg => interaction.editReply(msg)
+            );
         } catch (err) {
             console.error(err);
-            await interaction.reply({ content: '⚠️  I couldn\'t play that track.', ephemeral: true });
+            if (interaction.replied || interaction.deferred) {
+                await interaction.editReply('⚠️  Skipping unplayable track.');
+            } else {
+                await interaction.reply({ content: '⚠️  Skipping unplayable track.', flags: 1 << 6 });
+            }
+            const conn = player.subscribers.find(sub => sub.connection?.joinConfig.guildId === interaction.guild?.id)?.connection;
+            if (conn) void playFromQueue(conn);
+        }
+    }
+    else if (interaction.commandName === 'queue') {
+        // Defer reply to avoid interaction timeout while formatting
+        await interaction.deferReply();
+        const gid = interaction.guild?.id;
+        if (gid) {
+            await interaction.editReply(await formatQueue(gid));
+        } else {
+            await interaction.editReply({ content: '⚠️  I can\'t determine the guild.', flags: 1 << 6 });
+        }
+    }
+    else if (interaction.commandName === 'clearqueue') {
+        const gid = interaction.guild?.id;
+        if (gid) {
+            queues.set(gid, []);
+            await interaction.reply('🗑️  Cleared the queue.');
+        } else {
+            await interaction.reply({ content: '⚠️  I can\'t determine the guild.', ephemeral: true });
         }
     }
     else if (interaction.commandName === 'pause') {

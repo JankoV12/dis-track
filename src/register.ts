@@ -33,7 +33,15 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('leave')
-        .setDescription('Disconnect the bot from the voice channel')
+        .setDescription('Disconnect the bot from the voice channel'),
+
+    new SlashCommandBuilder()
+        .setName('clearqueue')
+        .setDescription('Clear the current playback queue'),
+
+    new SlashCommandBuilder()
+        .setName('queue')
+        .setDescription('Show the current playback queue')
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);
