@@ -41,7 +41,11 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName('queue')
-        .setDescription('Show the current playback queue')
+        .setDescription('Show the current playback queue'),
+
+    new SlashCommandBuilder()
+        .setName('np')
+        .setDescription('Show what\'s currently playing'),
 ].map(cmd => cmd.toJSON());
 
 const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN!);

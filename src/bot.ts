@@ -1,6 +1,11 @@
 import 'dotenv/config';
 import { Client, GatewayIntentBits, Events } from 'discord.js';
 import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType } from '@discordjs/voice';
+import {
+    EmbedBuilder,
+    ButtonBuilder,
+    ButtonStyle,
+    ActionRowBuilder} from 'discord.js';
 import playdl from 'play-dl';
 import ytdl from '@distube/ytdl-core';
 
@@ -22,9 +27,18 @@ if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
     console.warn('⚠️  Spotify credentials missing (SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET). Spotify links will fail.');
 }
 
+interface TrackMetadata {
+    url: string;
+    title: string;
+    artist: string;
+    duration: string;
+    requester: string;
+    thumbnail?: string;
+}
+
 
 const queues: Map<string, string[]> = new Map();
-
+const currentTracks: Map<string, TrackMetadata> = new Map();
 /**
  * A simple responder type so we can share logic between prefix‑commands and slash‑commands.
  * It’s just a function that sends a string somewhere (message.reply, interaction.editReply, etc.).
@@ -105,6 +119,38 @@ async function processPlayRequest(
             connection.subscribe(player);
         }
         const resource = await createResource(first);
+
+
+        const metadata: TrackMetadata = {
+            url: first,
+            title: 'Loading...',
+            artist: 'Loading...',
+            duration: 'Unknown',
+            requester: 'Unknown',
+            thumbnail: 'https://i.imgur.com/QMnXrF6.png'
+        };
+        currentTracks.set(guildId, metadata);
+
+    // Load metadata
+        (async () => {
+            try {
+                if (/open\.spotify\.com/.test(first)) {
+                    const sp = await playdl.spotify(first);
+                    metadata.title = sp.name;
+                    metadata.artist = sp.artists.map(a => a.name).join(', ');
+                    metadata.thumbnail = sp.thumbnail?.url;
+                } else {
+                    const info = await playdl.video_basic_info(first);
+                    metadata.title = info.video_details.title;
+                    metadata.artist = info.video_details.channel?.name || 'Unknown';
+                    metadata.duration = info.video_details.durationRaw;
+                    metadata.thumbnail = info.video_details.thumbnails[0]?.url;
+                }
+            } catch (err) {
+                console.error('Failed to load track metadata:', err);
+            }
+        })();
+
         player.play(resource);
         await respond(`🎶 Now playing: ${first}`);
     } else {
@@ -289,6 +335,39 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
         try {
             const resource = await createResource(nextUrl);
             connection.subscribe(player);
+
+
+            // Store track metadata
+            const metadata: TrackMetadata = {
+                url: nextUrl,
+                title: 'Loading...',
+                artist: 'Loading...',
+                duration: 'Unknown',
+                requester: 'Unknown',
+                thumbnail: 'https://i.imgur.com/QMnXrF6.png'
+            };
+            currentTracks.set(guildId, metadata);
+
+// Load metadata
+            (async () => {
+                try {
+                    if (/open\.spotify\.com/.test(nextUrl)) {
+                        const sp = await playdl.spotify(nextUrl);
+                        metadata.title = sp.name;
+                        metadata.artist = sp.artists.map(a => a.name).join(', ');
+                        metadata.thumbnail = sp.thumbnail?.url;
+                    } else {
+                        const info = await playdl.video_basic_info(nextUrl);
+                        metadata.title = info.video_details.title;
+                        metadata.artist = info.video_details.channel?.name || 'Unknown';
+                        metadata.duration = info.video_details.durationRaw;
+                        metadata.thumbnail = info.video_details.thumbnails[0]?.url;
+                    }
+                } catch (err) {
+                    console.error('Failed to load track metadata:', err);
+                }
+            })();
+
             player.play(resource);
             return; // success
         } catch (err) {
@@ -422,6 +501,44 @@ client.on(Events.MessageCreate, async message => {
     }
 });
 
+
+
+client.on(Events.InteractionCreate, async interaction => {
+
+    if (!interaction.isButton()) return;
+
+    if (interaction.customId === 'music_play_pause') {
+        if (player.state.status === AudioPlayerStatus.Playing) {
+            player.pause();
+            await interaction.reply({ content: '⏸️ Paused.', ephemeral: true });
+        } else if (player.state.status === AudioPlayerStatus.Paused) {
+            player.unpause();
+            await interaction.reply({ content: '▶️ Resumed.', ephemeral: true });
+        } else {
+            await interaction.reply({ content: '⚠️ Nothing is currently playing.', ephemeral: true });
+        }
+    }
+    else if (interaction.customId === 'music_skip') {
+        if (player.state.status !== AudioPlayerStatus.Idle) {
+            player.stop();
+            await interaction.reply({ content: '⏭️ Skipped.', ephemeral: true });
+        } else {
+            await interaction.reply({ content: '⚠️ Nothing to skip.', ephemeral: true });
+        }
+    }
+    else if (interaction.customId === 'music_stop') {
+        const connection = player.subscribers.find(sub => sub.connection)?.connection;
+        if (connection) {
+            queues.set(connection.joinConfig.guildId, []);
+            player.stop();
+            connection.destroy();
+            await interaction.reply({ content: '⏹️ Stopped playback and cleared queue.', ephemeral: true });
+        } else {
+            await interaction.reply({ content: '⚠️ I\'m not in a voice channel.', ephemeral: true });
+        }
+    }
+});
+
 // slash‑command handler
 client.on(Events.InteractionCreate, async interaction  => {
     if (!interaction.isChatInputCommand()) return;
@@ -524,6 +641,74 @@ client.on(Events.InteractionCreate, async interaction  => {
         } else {
             await interaction.reply({ content: '⚠️ I\'m not in a voice channel.', ephemeral: true });
         }
+    }
+    else if (interaction.commandName === 'NP') {
+        // Get current track info
+        const guildId = interaction.guild?.id;
+        if (!guildId) {
+            await interaction.reply({ content: '⚠️ Cannot determine the guild.', ephemeral: true });
+            return;
+        }
+
+        if (player.state.status !== AudioPlayerStatus.Playing &&
+            player.state.status !== AudioPlayerStatus.Paused) {
+            await interaction.reply({ content: '⚠️ Nothing is currently playing.', ephemeral: true });
+            return;
+        }
+
+        // Get current track metadata
+        const currentTrack = currentTracks.get(guildId) || {
+            url: 'unknown',
+            title: 'Unknown Track',
+            artist: 'Unknown Artist',
+            duration: 'Unknown',
+            requester: interaction.user.tag,
+            thumbnail: 'https://i.imgur.com/QMnXrF6.png'
+        };
+
+        // Get current queue to show what's playing
+        const queue = queues.get(guildId) || [];
+
+        const embed = new EmbedBuilder()
+            .setColor(0x0099FF)
+            .setTitle('🎵 Now Playing')
+            .setDescription(`**${currentTrack.title}** by ${currentTrack.artist}`)
+            .addFields(
+                { name: 'Duration', value: currentTrack.duration || 'Unknown', inline: true },
+                { name: 'Requested by', value: currentTrack.requester, inline: true },
+                { name: 'Queue', value: `${queue.length} tracks remaining`, inline: true }
+            )
+            .setThumbnail(currentTrack.thumbnail || 'https://i.imgur.com/QMnXrF6.png')
+            .setFooter({ text: 'Music Bot Controls' })
+            .setTimestamp();
+
+        // Buttons
+        const playPauseButton = new ButtonBuilder()
+            .setCustomId('music_play_pause')
+            .setLabel(player.state.status === AudioPlayerStatus.Playing ? 'Pause' : 'Play')
+            .setStyle(ButtonStyle.Primary)
+            .setEmoji(player.state.status === AudioPlayerStatus.Playing ? '⏸️' : '▶️');
+
+        const skipButton = new ButtonBuilder()
+            .setCustomId('music_skip')
+            .setLabel('Skip')
+            .setStyle(ButtonStyle.Secondary)
+            .setEmoji('⏭️');
+
+        const stopButton = new ButtonBuilder()
+            .setCustomId('music_stop')
+            .setLabel('Stop')
+            .setStyle(ButtonStyle.Danger)
+            .setEmoji('⏹️');
+
+        // Create Action Row to hold buttons
+        const row = new ActionRowBuilder<ButtonBuilder>()
+            .addComponents(playPauseButton, skipButton, stopButton);
+
+        await interaction.reply({
+            embeds: [embed],
+            components: [row]
+        });
     }
 });
 
