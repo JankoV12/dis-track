@@ -32,10 +32,6 @@ const commands = [
         .setDescription('Stop playback and clear the queue'),
 
     new SlashCommandBuilder()
-        .setName('leave')
-        .setDescription('Disconnect the bot from the voice channel'),
-
-    new SlashCommandBuilder()
         .setName('clearqueue')
         .setDescription('Clear the current playback queue'),
 
