@@ -505,7 +505,6 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 
         if (members.size === 0) {
             // Bot is alone, start inactivity timer
-            console.log(`🤖 Bot is alone in ${botVoiceChannel.name}, starting 3-minute timer`);
             checkInactivity(connection);
         } else {
             // Users present, cancel any disconnect timer
@@ -971,7 +970,7 @@ client.on(Events.InteractionCreate, async interaction  => {
 
 void client.login(process.env.DISCORD_TOKEN);
 
-// Export these functions at the end of bot.ts to be used by the API
+
 export function getPlayerState() {
     return {
         status: player.state.status,

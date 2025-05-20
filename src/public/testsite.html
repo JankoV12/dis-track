@@ -1,0 +1,233 @@
+<!-- src/public/testsite.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Discord Music Bot API Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .card {
+            border: 1px solid #ccc;
+            border-radius: 8px;
+            padding: 15px;
+            background-color: #f9f9f9;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+        button {
+            padding: 8px 12px;
+            cursor: pointer;
+            background-color: #7289DA;
+            color: white;
+            border: none;
+            border-radius: 4px;
+        }
+        button:hover {
+            background-color: #5b6eae;
+        }
+        pre {
+            background-color: #eee;
+            padding: 10px;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>Discord Music Bot API Test</h1>
+
+    <div class="card">
+        <h2>Server Settings</h2>
+        <div>
+            <label for="guildId">Guild ID:</label>
+            <input type="text" id="guildId" placeholder="Enter Discord Guild ID">
+            <button onclick="saveGuildId()">Save</button>
+        </div>
+        <div>
+            <label for="apiUrl">API URL:</label>
+            <input type="text" id="apiUrl" value="http://localhost:3000" placeholder="API URL">
+            <button onclick="saveApiUrl()">Save</button>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Player Status</h2>
+        <button onclick="getStatus()">Get Status</button>
+        <div id="status-output">
+            <pre>No data</pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Now Playing</h2>
+        <button onclick="getNowPlaying()">Get Current Track</button>
+        <div id="now-playing-output">
+            <pre>No data</pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Queue</h2>
+        <button onclick="getQueue()">Get Queue</button>
+        <div id="queue-output">
+            <pre>No data</pre>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Controls</h2>
+        <div class="controls">
+            <button onclick="pause()">Pause</button>
+            <button onclick="resume()">Resume</button>
+            <button onclick="skip()">Skip</button>
+            <button onclick="stop()">Stop</button>
+        </div>
+        <div id="controls-output">
+            <pre>No response</pre>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Local storage keys
+    const GUILD_ID_KEY = 'music_bot_guild_id';
+    const API_URL_KEY = 'music_bot_api_url';
+
+    // Initialize form values from localStorage
+    window.onload = function() {
+        document.getElementById('guildId').value = localStorage.getItem(GUILD_ID_KEY) || '';
+        document.getElementById('apiUrl').value = localStorage.getItem(API_URL_KEY) || 'http://localhost:3000';
+    };
+
+    // Save settings to localStorage
+    function saveGuildId() {
+        const guildId = document.getElementById('guildId').value.trim();
+        localStorage.setItem(GUILD_ID_KEY, guildId);
+        alert('Guild ID saved!');
+    }
+
+    function saveApiUrl() {
+        const apiUrl = document.getElementById('apiUrl').value.trim();
+        localStorage.setItem(API_URL_KEY, apiUrl);
+        alert('API URL saved!');
+    }
+
+    // Get settings from localStorage
+    function getGuildId() {
+        const guildId = localStorage.getItem(GUILD_ID_KEY);
+        if (!guildId) {
+            alert('Please enter a Guild ID first');
+            return null;
+        }
+        return guildId;
+    }
+
+    function getApiUrl() {
+        return localStorage.getItem(API_URL_KEY) || 'http://localhost:3000';
+    }
+
+    // API Calls
+    async function fetchApi(endpoint, method = 'GET', body = null) {
+        const url = `${getApiUrl()}${endpoint}`;
+        const options = {
+            method,
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        };
+
+        if (body) {
+            options.body = JSON.stringify(body);
+        }
+
+        try {
+            const response = await fetch(url, options);
+            const data = await response.json();
+            return { success: true, data };
+        } catch (error) {
+            console.error('API Error:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
+    // Status endpoint
+    async function getStatus() {
+        const result = await fetchApi('/api/status');
+        document.getElementById('status-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    // Now Playing endpoint
+    async function getNowPlaying() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/now-playing/${guildId}`);
+        document.getElementById('now-playing-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    // Queue endpoint
+    async function getQueue() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/queue/${guildId}`);
+        document.getElementById('queue-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    // Control endpoints
+    async function pause() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/controls/${guildId}/pause`, 'POST');
+        document.getElementById('controls-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    async function resume() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/controls/${guildId}/resume`, 'POST');
+        document.getElementById('controls-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    async function skip() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/controls/${guildId}/skip`, 'POST');
+        document.getElementById('controls-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    async function stop() {
+        const guildId = getGuildId();
+        if (!guildId) return;
+
+        const result = await fetchApi(`/api/controls/${guildId}/stop`, 'POST');
+        document.getElementById('controls-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+</script>
+</body>
+</html>
