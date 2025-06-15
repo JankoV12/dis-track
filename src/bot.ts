@@ -947,7 +947,7 @@ client.on(Events.InteractionCreate, async interaction  => {
     else if (interaction.commandName === 'clearqueue') {
         const gid = interaction.guild?.id;
         if (gid) {
-            queues.set(gid, []);
+            queues.set(guildId, []);
             await interaction.reply('🗑️  Cleared the queue.');
         } else {
             await interaction.reply({ content: '⚠️  I can\'t determine the guild.', ephemeral: true });
@@ -1079,7 +1079,7 @@ export function stopPlayback(guildId: string): boolean {
     return false;
 }
 
-export function addToQueue(guildId: string, url: string): boolean {
+export async function addToQueue(guildId: string, url: string): Promise<boolean> {
     try {
         // Get existing queue or create new one
         let q = queues.get(guildId);
@@ -1088,8 +1088,43 @@ export function addToQueue(guildId: string, url: string): boolean {
             queues.set(guildId, q);
         }
 
-        // Add the URL to the queue
-        q.push(url);
+        // Resolve the first track to see if it's playable
+        const first = await resolveFirstTrack(url);
+
+        // If the first track isn't directly playable (e.g., a complex playlist)
+        if (!first) {
+            // Try to resolve all tracks from the URL
+            const playable = await resolveTracks(url);
+            if (playable.length === 0) {
+                console.log(`Couldn't resolve ${url} to any playable tracks`);
+                return false;
+            }
+
+            // Add all resolved tracks to the queue
+            q.push(...playable);
+
+            // Start playback if player is idle and a connection exists
+            const player = getPlayer(guildId);
+            if (player.state.status === AudioPlayerStatus.Idle) {
+                const connection = getVoiceConnections().get(guildId);
+                if (connection) {
+                    void playFromQueue(connection);
+                }
+            }
+
+            return true;
+        }
+
+        // Add first track to queue
+        q.push(first);
+
+        // Process the rest of the tracks in the background if it's a playlist
+        (async () => {
+            const rest = await resolveTracks(url);
+            // If rest contains first track, remove it to avoid duplication
+            if (rest.length && rest[0] === first) rest.shift();
+            if (rest.length) q.push(...rest);
+        })();
 
         // Start playback if nothing is playing
         const player = getPlayer(guildId);
@@ -1097,10 +1132,7 @@ export function addToQueue(guildId: string, url: string): boolean {
             const connection = getVoiceConnections().get(guildId);
             if (connection) {
                 void playFromQueue(connection);
-                return true;
             }
-            // No active connection yet, queue added but playback not started
-            return true;
         }
 
         return true;
