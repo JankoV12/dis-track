@@ -45,11 +45,44 @@ interface TrackMetadata {
 const nowPlayingMessages = new Map<string, { message: import('discord.js').Message | null, interaction: import('discord.js').CommandInteraction | null }>();
 const queues: Map<string, string[]> = new Map();
 const currentTracks: Map<string, TrackMetadata> = new Map();
+const players: Map<string, import('@discordjs/voice').AudioPlayer> = new Map();
 /**
  * A simple responder type so we can share logic between prefix‑commands and slash‑commands.
  * It’s just a function that sends a string somewhere (message.reply, interaction.editReply, etc.).
  */
 type Responder = (content: string) => Promise<any>;
+
+function getPlayer(guildId: string): import('@discordjs/voice').AudioPlayer {
+    let player = players.get(guildId);
+    if (!player) {
+        player = createAudioPlayer();
+        players.set(guildId, player);
+
+        player.on(AudioPlayerStatus.Idle, () => {
+            const connection = getVoiceConnections().get(guildId);
+            if (connection) {
+                void playFromQueue(connection);
+                if (!queues.get(guildId)?.length) {
+                    checkInactivity(connection);
+                }
+            }
+            void updateNowPlayingEmbed(guildId);
+        });
+
+        player.on(AudioPlayerStatus.Playing, () => {
+            const connection = getVoiceConnections().get(guildId);
+            if (connection) {
+                cancelInactivityCheck(guildId);
+            }
+            void updateNowPlayingEmbed(guildId);
+        });
+
+        player.on(AudioPlayerStatus.Paused, () => {
+            void updateNowPlayingEmbed(guildId);
+        });
+    }
+    return player;
+}
 
 /**
  * Core logic for the “play” request.
@@ -63,6 +96,7 @@ async function processPlayRequest(
     respond: Responder
 ): Promise<void> {
     // ---------------- main logic ----------------
+    const player = getPlayer(guildId);
     const first = await resolveFirstTrack(url);
 
     // ── If the first track itself is unplayable … ──────────────────
@@ -79,8 +113,7 @@ async function processPlayRequest(
         q.push(...playable);
 
         // ensure / reuse a voice connection then start playback
-        let connection =
-            (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === guildId)?.connection;
+        let connection = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === guildId)?.connection;
         if (!connection) {
             connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
@@ -344,6 +377,7 @@ async function safeCreateResource(url: string) {
  */
 async function playFromQueue(connection: import('@discordjs/voice').VoiceConnection) {
     const guildId = connection.joinConfig.guildId;
+    const player = getPlayer(guildId);
     const q = queues.get(guildId);
     if (!q || q.length === 0) {
         updateEmbedToStopped(guildId);
@@ -435,69 +469,6 @@ const client = new Client({
     ]
 });
 
-const player = createAudioPlayer();
-
-player.on(AudioPlayerStatus.Idle, () => {
-    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
-    const connection = guildId ? getVoiceConnection(guildId) : undefined;
-    if (connection) {
-        void playFromQueue(connection);
-        // Start inactivity timer when queue is empty
-        if (!queues.get(connection.joinConfig.guildId)?.length) {
-            checkInactivity(connection);
-        }
-    }
-
-    // Update all embeds
-    for (const [guildId] of nowPlayingMessages.entries()) {
-        void updateNowPlayingEmbed(guildId);
-    }
-});
-
-player.on(AudioPlayerStatus.Playing, () => {
-    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
-    const connection = guildId ? getVoiceConnection(guildId) : undefined;
-    if (connection) {
-        // Cancel inactivity timer when playback starts
-        cancelInactivityCheck(connection.joinConfig.guildId);
-    }
-
-    // Update all embeds
-    for (const [guildId] of nowPlayingMessages.entries()) {
-        void updateNowPlayingEmbed(guildId);
-    }
-});
-
-player.on(AudioPlayerStatus.Paused, () => {
-    // Update all embeds
-    for (const [guildId] of nowPlayingMessages.entries()) {
-        void updateNowPlayingEmbed(guildId);
-    }
-});
-
-// Helper to get the active voice connection
-function getVoiceConnection(): import('@discordjs/voice').VoiceConnection | undefined {
-    // First try: find connections that have our player subscribed
-    try {
-        // This is technically accessing a private property but it works
-        const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
-        if (connection) return connection;
-    } catch {
-        // Fall through to alternative methods if the above fails
-    }
-
-    // Alternative: get all connections and try to determine which one is active
-    const connections = Array.from(getVoiceConnections().values());
-
-    // If there's only one connection, that's likely our active one
-    if (connections.length === 1) return connections[0];
-
-    // Otherwise check which connection has a non-empty queue
-    return connections.find(conn =>
-        (queues.get(conn.joinConfig.guildId)?.length ?? 0) > 0 ||
-        currentTracks.has(conn.joinConfig.guildId)
-    );
-}
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
     // Only care about changes in the same guild
@@ -539,7 +510,7 @@ async function updateNowPlayingEmbed(guildId: string): Promise<void> {
     const embed = createNowPlayingEmbed(guildId);
 
     // Create buttons
-    const row = createNowPlayingButtons();
+    const row = createNowPlayingButtons(guildId);
 
     // Update
     try {
@@ -562,6 +533,7 @@ async function updateNowPlayingEmbed(guildId: string): Promise<void> {
 }
 
 function createNowPlayingEmbed(guildId: string): EmbedBuilder {
+    const player = getPlayer(guildId);
     const isPlaying = player.state.status === AudioPlayerStatus.Playing ||
         player.state.status === AudioPlayerStatus.Paused;
 
@@ -599,7 +571,8 @@ function createNowPlayingEmbed(guildId: string): EmbedBuilder {
     return embed;
 }
 
-function createNowPlayingButtons(): ActionRowBuilder<ButtonBuilder> {
+function createNowPlayingButtons(guildId: string): ActionRowBuilder<ButtonBuilder> {
+    const player = getPlayer(guildId);
     const playPauseButton = new ButtonBuilder()
         .setCustomId('music_play_pause')
         .setLabel(player.state.status === AudioPlayerStatus.Playing ? 'Pause' : 'Play')
@@ -643,7 +616,7 @@ async function NowPlayingEmbedHandler(guildId: string, interaction?: import('dis
 
     // Create new embed and buttons
     const embed = createNowPlayingEmbed(guildId);
-    const row = createNowPlayingButtons();
+    const row = createNowPlayingButtons(guildId);
 
     // Send new embed via the provided interaction or create a new message
     if (interaction) {
@@ -694,7 +667,7 @@ function updateEmbedToStopped(guildId: string): void {
         .setTimestamp();
 
     // Create buttons for controls
-    const row = createNowPlayingButtons();
+    const row = createNowPlayingButtons(guildId);
 
     // Update the message
     try {
@@ -783,8 +756,12 @@ client.on(Events.MessageCreate, async message => {
         } catch (err: any) {
             console.error(err);
             await message.reply('⚠️  Skipping unplayable track.');
-            const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === message.guild?.id)?.connection;
-            if (conn) void playFromQueue(conn);
+            const gid = message.guild?.id;
+            if (gid) {
+                const player = getPlayer(gid);
+                const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === gid)?.connection;
+                if (conn) void playFromQueue(conn);
+            }
         }
     }
     else if (message.content === '!queue') {
@@ -805,6 +782,9 @@ client.on(Events.MessageCreate, async message => {
         }
     }
     else if (message.content === '!pause') {
+        const gid = message.guild?.id;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status === AudioPlayerStatus.Playing) {
             player.pause();
             await message.reply('⏸️ Paused.');
@@ -813,6 +793,9 @@ client.on(Events.MessageCreate, async message => {
         }
     }
     else if (message.content === '!resume') {
+        const gid = message.guild?.id;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status === AudioPlayerStatus.Paused) {
             player.unpause();
             await message.reply('▶️ Resumed.');
@@ -821,6 +804,9 @@ client.on(Events.MessageCreate, async message => {
         }
     }
     else if (message.content === '!skip') {
+        const gid = message.guild?.id;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status !== AudioPlayerStatus.Idle) {
             player.stop();
             await message.reply('⏭️ Skipped.');
@@ -829,6 +815,9 @@ client.on(Events.MessageCreate, async message => {
         }
     }
     else if (message.content === '!stop') {
+        const gid = message.guild?.id;
+        if (!gid) return;
+        const player = getPlayer(gid);
         const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
@@ -853,6 +842,9 @@ client.on(Events.InteractionCreate, async interaction => {
     if (!interaction.isButton()) return;
 
     if (interaction.customId === 'music_play_pause') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status === AudioPlayerStatus.Playing) {
             player.pause();
             await interaction.reply({ content: '⏸️ Paused.', ephemeral: true });
@@ -864,6 +856,9 @@ client.on(Events.InteractionCreate, async interaction => {
         }
     }
     else if (interaction.customId === 'music_skip') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status !== AudioPlayerStatus.Idle) {
             player.stop();
             await interaction.reply({ content: '⏭️ Skipped.', ephemeral: true });
@@ -873,6 +868,9 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     else if (interaction.customId === 'music_stop') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
@@ -921,8 +919,12 @@ client.on(Events.InteractionCreate, async interaction  => {
             } else {
                 await interaction.reply({ content: '⚠️  Skipping unplayable track.', flags: 1 << 6 });
             }
-            const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === interaction.guild?.id)?.connection;
-            if (conn) void playFromQueue(conn);
+            const gid = interaction.guild?.id;
+            if (gid) {
+                const player = getPlayer(gid);
+                const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === gid)?.connection;
+                if (conn) void playFromQueue(conn);
+            }
         }
     }
     else if (interaction.commandName === 'queue') {
@@ -945,6 +947,9 @@ client.on(Events.InteractionCreate, async interaction  => {
         }
     }
     else if (interaction.commandName === 'pause') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status === AudioPlayerStatus.Playing) {
             player.pause();
             await interaction.reply('⏸️ Paused.');
@@ -953,6 +958,9 @@ client.on(Events.InteractionCreate, async interaction  => {
         }
     }
     else if (interaction.commandName === 'resume') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status === AudioPlayerStatus.Paused) {
             player.unpause();
             await interaction.reply('▶️ Resumed.');
@@ -961,6 +969,9 @@ client.on(Events.InteractionCreate, async interaction  => {
         }
     }
     else if (interaction.commandName === 'skip') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         if (player.state.status !== AudioPlayerStatus.Idle) {
             player.stop();
             await interaction.reply('⏭️ Skipped.');
@@ -969,6 +980,9 @@ client.on(Events.InteractionCreate, async interaction  => {
         }
     }
     else if (interaction.commandName === 'stop') {
+        const gid = interaction.guildId;
+        if (!gid) return;
+        const player = getPlayer(gid);
         const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
@@ -1000,8 +1014,12 @@ void client.login(process.env.DISCORD_TOKEN);
 
 
 export function getPlayerState() {
+    const statuses: Record<string, AudioPlayerStatus> = {};
+    for (const [gid, player] of players.entries()) {
+        statuses[gid] = player.state.status;
+    }
     return {
-        status: player.state.status,
+        status: statuses,
         connections: Array.from(getVoiceConnections().keys())
     };
 }
@@ -1015,7 +1033,8 @@ export function getQueue(guildId: string) {
 }
 
 export function pausePlayback(guildId: string): boolean {
-    if (player.state.status === AudioPlayerStatus.Playing) {
+    const player = players.get(guildId);
+    if (player && player.state.status === AudioPlayerStatus.Playing) {
         player.pause();
         return true;
     }
@@ -1023,7 +1042,8 @@ export function pausePlayback(guildId: string): boolean {
 }
 
 export function resumePlayback(guildId: string): boolean {
-    if (player.state.status === AudioPlayerStatus.Paused) {
+    const player = players.get(guildId);
+    if (player && player.state.status === AudioPlayerStatus.Paused) {
         player.unpause();
         return true;
     }
@@ -1031,7 +1051,8 @@ export function resumePlayback(guildId: string): boolean {
 }
 
 export function skipTrack(guildId: string): boolean {
-    if (player.state.status !== AudioPlayerStatus.Idle) {
+    const player = players.get(guildId);
+    if (player && player.state.status !== AudioPlayerStatus.Idle) {
         player.stop();
         return true;
     }
@@ -1040,7 +1061,8 @@ export function skipTrack(guildId: string): boolean {
 
 export function stopPlayback(guildId: string): boolean {
     const connection = getVoiceConnections().get(guildId);
-    if (connection) {
+    const player = players.get(guildId);
+    if (connection && player) {
         queues.set(guildId, []);
         player.stop();
         connection.destroy();
