@@ -638,6 +638,22 @@ async function NowPlayingEmbedHandler(guildId: string, interaction?: import('dis
             message: null,
             interaction: interaction
         });
+    } else {
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return;
+
+        const channel = guild.systemChannel || guild.channels.cache.find(c => c.isTextBased());
+        if (!channel || !channel.isTextBased()) return;
+
+        const message = await channel.send({
+            embeds: [embed],
+            components: [row]
+        });
+
+        nowPlayingMessages.set(guildId, {
+            message,
+            interaction: null
+        });
     }
 }
 
