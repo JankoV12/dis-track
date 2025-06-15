@@ -428,7 +428,8 @@ const client = new Client({
 const player = createAudioPlayer();
 
 player.on(AudioPlayerStatus.Idle, () => {
-    const connection = getVoiceConnection();
+    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
+    const connection = guildId ? getVoiceConnection(guildId) : undefined;
     if (connection) {
         void playFromQueue(connection);
         // Start inactivity timer when queue is empty
@@ -444,7 +445,8 @@ player.on(AudioPlayerStatus.Idle, () => {
 });
 
 player.on(AudioPlayerStatus.Playing, () => {
-    const connection = getVoiceConnection();
+    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
+    const connection = guildId ? getVoiceConnection(guildId) : undefined;
     if (connection) {
         // Cancel inactivity timer when playback starts
         cancelInactivityCheck(connection.joinConfig.guildId);
@@ -463,28 +465,9 @@ player.on(AudioPlayerStatus.Paused, () => {
     }
 });
 
-// Helper to get the active voice connection
-function getVoiceConnection(): import('@discordjs/voice').VoiceConnection | undefined {
-    // First try: find connections that have our player subscribed
-    try {
-        // This is technically accessing a private property but it works
-        const connection = player.subscribers.find(sub => sub.connection)?.connection;
-        if (connection) return connection;
-    } catch {
-        // Fall through to alternative methods if the above fails
-    }
-
-    // Alternative: get all connections and try to determine which one is active
-    const connections = Array.from(getVoiceConnections().values());
-
-    // If there's only one connection, that's likely our active one
-    if (connections.length === 1) return connections[0];
-
-    // Otherwise check which connection has a non-empty queue
-    return connections.find(conn =>
-        queues.get(conn.joinConfig.guildId)?.length > 0 ||
-        currentTracks.has(conn.joinConfig.guildId)
-    );
+// Helper to get a guild's voice connection
+function getVoiceConnection(guildId: string): import('@discordjs/voice').VoiceConnection | undefined {
+    return getVoiceConnections().get(guildId);
 }
 
 client.on(Events.VoiceStateUpdate, (oldState, newState) => {
