@@ -11,6 +11,9 @@ import {
 import playdl from 'play-dl';
 import ytdl from '@distube/ytdl-core';
 
+// Optional debug flag to log skipped tracks
+const LOG_SKIPPED_TRACKS = process.env.LOG_SKIPPED_TRACKS === 'true';
+
 // Try to authorise Spotify access for play‑dl
 if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
     playdl.setToken({
@@ -351,7 +354,7 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
     let retryCount = 0;
     const maxRetries = 3;
 
-    while (q.length && retryCount < maxRetries) {
+    while (q.length) {
         const nextUrl = q.shift()!;
         try {
             const resource = await safeCreateResource(nextUrl);
@@ -379,14 +382,21 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
                 retryCount = 0; // Reset retry count for new URL
             } else {
                 console.error('⤼ Failed to play track, skipping:', nextUrl, err);
+                if (LOG_SKIPPED_TRACKS) {
+                    console.log(`Skipped track due to error: ${nextUrl}`);
+                }
                 retryCount++;
+                if (retryCount >= maxRetries) {
+                    console.error(`❌ Reached ${maxRetries} consecutive failures. Continuing queue.`);
+                    retryCount = 0;
+                }
             }
         }
     }
 
-    // No playable tracks remain or max retries reached
-    if (retryCount >= maxRetries) {
-        console.error(`❌ Failed to play any tracks after ${maxRetries} attempts`);
+    // No playable tracks remain
+    if (retryCount > 0) {
+        console.error(`❌ Failed to play any tracks after scanning the queue.`);
     }
 
     updateEmbedToStopped(guildId);
