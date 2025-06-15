@@ -29,8 +29,8 @@ interface CachedTrackInfo {
 
 const trackInfoCache = new Map<string, CachedTrackInfo>();
 
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const CLIENT_ID = process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const BOT_TOKEN = process.env.DISCORD_TOKEN;
 
 if (!CLIENT_ID || !CLIENT_SECRET || !BOT_TOKEN) {
