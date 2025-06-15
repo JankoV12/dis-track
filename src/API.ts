@@ -14,7 +14,9 @@ import {
     resumePlayback,
     skipTrack,
     stopPlayback,
-    addToQueue
+    addToQueue,
+    processPlayRequest,
+    client
 } from './bot';
 import playdl from 'play-dl';
 
@@ -189,6 +191,40 @@ app.post<{ guildId: string }>('/api/controls/:guildId/stop', (req, res) => {
         res.json({ success: true, message: 'Playback stopped' });
     } else {
         res.status(400).json({ success: false, message: 'Failed to stop playback' });
+    }
+});
+
+app.post<{ guildId: string }>('/api/queue/:guildId/add', async (req, res) => {
+    const { guildId } = req.params;
+    const { url, requester, requesterUId } = req.body as { url?: string; requester?: string; requesterUId?: string };
+
+    if (!url || typeof url !== 'string' || !requesterUId) {
+        res.status(400).json({ success: false, message: 'url and requesterUId are required parameters' });
+        return;
+    }
+
+    try {
+        const guild = await client.guilds.fetch(guildId);
+        const member = await guild.members.fetch(requesterUId);
+        const voiceChannel = member.voice.channel;
+
+        if (!voiceChannel) {
+            res.status(400).json({ success: false, message: 'Requester is not in a voice channel' });
+            return;
+        }
+
+        await processPlayRequest(
+            url,
+            voiceChannel,
+            guildId,
+            () => Promise.resolve(),
+            requester || member.displayName || member.user.username
+        );
+
+        res.status(201).json({ success: true, message: 'Song added to queue', url });
+    } catch (error: any) {
+        console.error('Error joining voice or adding song:', error);
+        res.status(500).json({ success: false, message: 'Failed to process add request', error: error.message });
     }
 });
 

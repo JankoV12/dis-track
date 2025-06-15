@@ -278,6 +278,53 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FailureResponse'
+  /api/queue/{guildId}/add:
+    post:
+      summary: Add a song and join the requester's voice channel
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the song/playlist to add.
+                requester:
+                  type: string
+                  description: Name of the user requesting the song (optional).
+                requesterUId:
+                  type: string
+                  description: Discord user ID of the requester.
+              required:
+                - url
+                - requesterUId
+      responses:
+        '201':
+          description: Song added to queue and playback started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddTrackResponse'
+        '400':
+          description: Invalid request or requester not in voice channel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
 components:
   schemas:
     TrackMetadata:
