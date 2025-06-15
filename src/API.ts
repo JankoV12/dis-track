@@ -13,7 +13,8 @@ import {
     pausePlayback,
     resumePlayback,
     skipTrack,
-    stopPlayback
+    stopPlayback,
+    addToQueue
 } from './bot';
 import playdl from 'play-dl';
 
@@ -179,6 +180,38 @@ app.post<{ guildId: string }>('/api/controls/:guildId/stop', (req, res) => {
     }
 });
 
+app.post<{ guildId: string }>('/api/queue/:guildId', async (req, res) => {
+    const { guildId } = req.params;
+    const { url } = req.body;
+
+    if (!url || typeof url !== 'string') {
+        return res.status(400).json({ success: false, message: 'Song URL is a required parameter' });
+    }
+
+    try {
+        const success = addToQueue(guildId, url);
+
+        if (success) {
+            res.status(201).json({
+                success: true,
+                message: 'Song added to queue',
+                url: url
+            });
+        } else {
+            res.status(500).json({
+                success: false,
+                message: 'Failed to add song to queue'
+            });
+        }
+    } catch (error: any) {
+        console.error('Error adding track to queue:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error adding song to queue',
+            error: error.message
+        });
+    }
+});
 
 // Serve Swagger UI at the API root
 app.use('/', swaggerUi.serve, swaggerUi.setup(swaggerDocument));

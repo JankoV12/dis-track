@@ -1,5 +1,12 @@
 import 'dotenv/config';
-import { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState, StreamType, getVoiceConnections} from '@discordjs/voice';
+import { joinVoiceChannel,
+    createAudioPlayer,
+    createAudioResource,
+    AudioPlayerStatus,
+    VoiceConnectionStatus,
+    entersState,
+    StreamType,
+    getVoiceConnections} from '@discordjs/voice';
 import {
     Client,
     GatewayIntentBits,
@@ -1070,4 +1077,35 @@ export function stopPlayback(guildId: string): boolean {
         return true;
     }
     return false;
+}
+
+export function addToQueue(guildId: string, url: string): boolean {
+    try {
+        // Get existing queue or create new one
+        let q = queues.get(guildId);
+        if (!q) {
+            q = [];
+            queues.set(guildId, q);
+        }
+
+        // Add the URL to the queue
+        q.push(url);
+
+        // Start playback if nothing is playing
+        const player = getPlayer(guildId);
+        if (player.state.status === AudioPlayerStatus.Idle) {
+            const connection = getVoiceConnections().get(guildId);
+            if (connection) {
+                void playFromQueue(connection);
+                return true;
+            }
+            // No active connection yet, queue added but playback not started
+            return true;
+        }
+
+        return true;
+    } catch (error) {
+        console.error('Error adding to queue:', error);
+        return false;
+    }
 }

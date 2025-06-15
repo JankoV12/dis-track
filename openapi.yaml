@@ -235,6 +235,49 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FailureResponse'
+  /api/queue/{guildId}/add:
+    post:
+      summary: Add a song to the queue
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                url:
+                  type: string
+                  description: The URL of the song/playlist to add.
+                requester:
+                  type: string
+                  description: Name of the user requesting the song (optional).
+              required:
+                - url
+      responses:
+        '200':
+          description: Song added to queue
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AddTrackResponse'
+        '400':
+          description: Invalid request (e.g., missing URL, unresolvable URL)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
 components:
   schemas:
     TrackMetadata:
@@ -258,6 +301,25 @@ components:
         - artist
         - duration
         - requester
+    AddTrackResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        trackTitle:
+          type: string
+          nullable: true
+        tracksAdded:
+          type: integer
+          nullable: true
+        queueLength:
+          type: integer
+          nullable: true
+      required:
+        - success
+        - message
     QueueItem:
       type: object
       properties:
