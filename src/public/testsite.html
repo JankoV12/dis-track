@@ -101,6 +101,21 @@
             <pre>No response</pre>
         </div>
     </div>
+
+    <div class="card">
+        <h2>Add to Queue</h2>
+        <div>
+            <label for="songUrl">Song URL:</label>
+            <input type="text" id="songUrl" placeholder="Enter YouTube/Spotify URL" style="width: 70%;">
+        </div>
+        <div class="controls" style="margin-top: 10px;">
+            <button onclick="addToQueue()">Add to Queue</button>
+        </div>
+        <div id="add-queue-output">
+            <pre>No response</pre>
+        </div>
+    </div>
+
 </div>
 
 <script>
@@ -226,6 +241,21 @@
 
         const result = await fetchApi(`/api/controls/${guildId}/stop`, 'POST');
         document.getElementById('controls-output').innerHTML =
+            `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
+    }
+
+    // Add to Queue endpoint
+    async function addToQueue() {
+        const guildId = getGuildId();
+        const songUrl = document.getElementById('songUrl').value.trim();
+        if (!guildId) return;
+        if (!songUrl) {
+            alert('Please enter a song URL');
+            return;
+        }
+
+        const result = await fetchApi(`/api/queue/${guildId}`, 'POST', { url: songUrl });
+        document.getElementById('add-queue-output').innerHTML =
             `<pre>${JSON.stringify(result.data, null, 2)}</pre>`;
     }
 </script>
