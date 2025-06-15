@@ -48,9 +48,14 @@ interface TrackMetadata {
     thumbnail?: string;
 }
 
+interface QueueItem {
+    url: string;
+    requester?: string;
+}
+
 // Map of currently playing tracks, used for slash command responses
 const nowPlayingMessages = new Map<string, { message: import('discord.js').Message | null, interaction: import('discord.js').CommandInteraction | null }>();
-const queues: Map<string, string[]> = new Map();
+const queues: Map<string, QueueItem[]> = new Map();
 const currentTracks: Map<string, TrackMetadata> = new Map();
 const players: Map<string, import('@discordjs/voice').AudioPlayer> = new Map();
 /**
@@ -100,7 +105,8 @@ async function processPlayRequest(
     url: string,
     voiceChannel: Exclude<import('discord.js').GuildMember['voice']['channel'], null>,
     guildId: string,
-    respond: Responder
+    respond: Responder,
+    requester: string
 ): Promise<void> {
     // ---------------- main logic ----------------
     const player = getPlayer(guildId);
@@ -117,7 +123,7 @@ async function processPlayRequest(
         // push whole list to queue
         let q = queues.get(guildId);
         if (!q) { q = []; queues.set(guildId, q); }
-        q.push(...playable);
+        q.push(...playable.map(u => ({ url: u, requester })));
 
         // ensure / reuse a voice connection then start playback
         let connection = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === guildId)?.connection;
@@ -147,7 +153,7 @@ async function processPlayRequest(
     (async () => {
         const rest = await resolveTracks(url);
         if (rest.length && rest[0] === first) rest.shift();
-        if (rest.length) q.push(...rest);
+        if (rest.length) q.push(...rest.map(u => ({ url: u, requester })));
     })();
 
     const existingConn =
@@ -173,7 +179,7 @@ async function processPlayRequest(
             title: 'Loading...',
             artist: 'Loading...',
             duration: 'Unknown',
-            requester: 'Unknown',
+            requester,
             thumbnail: 'https://i.imgur.com/QMnXrF6.png'
         };
         currentTracks.set(guildId, metadata);
@@ -201,7 +207,7 @@ async function processPlayRequest(
         player.play(resource);
         await respond(`🎶 Now playing: ${first}`);
     } else {
-        q.push(first);
+        q.push({ url: first, requester });
         await respond('📥 Added to queue.');
     }
 }
@@ -214,7 +220,8 @@ async function formatQueue(guildId: string): Promise<string> {
     if (q.length === 0) return '📭 The queue is empty.';
     const lines: string[] = [];
     for (let i = 0; i < Math.min(q.length, 20); i++) {
-        const url = q[i];
+        const item = q[i];
+        const url = item.url;
         let title = url;
         let author = '';
         try {
@@ -396,10 +403,11 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
     const maxRetries = 3;
 
     while (q.length) {
-        const nextUrl = q.shift()!;
+        const nextItem = q.shift()!;
+        const nextUrl = nextItem.url;
         try {
-            const resource = await safeCreateResource(nextUrl);
-            connection.subscribe(player);
+        const resource = await safeCreateResource(nextUrl);
+        connection.subscribe(player);
 
             // Store track metadata
             const metadata: TrackMetadata = {
@@ -407,7 +415,7 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
                 title: 'Loading...',
                 artist: 'Loading...',
                 duration: 'Loading...',
-                requester: 'Loading...',
+                requester: nextItem.requester || 'Unknown',
                 thumbnail: 'https://cdn.discordapp.com/avatars/1371932098851639357/e5f72d929c24d25c4153d11f7e06c766.webp?size=1024&format=webp&width=1024&height=1024'
             };
             currentTracks.set(guildId, metadata);
@@ -758,7 +766,8 @@ client.on(Events.MessageCreate, async message => {
                 url,
                 voiceChannel,
                 voiceChannel.guild.id,
-                msg => message.reply(msg)
+                msg => message.reply(msg),
+                message.member?.displayName || message.author.username
             );
         } catch (err: any) {
             console.error(err);
@@ -917,7 +926,8 @@ client.on(Events.InteractionCreate, async interaction  => {
                 url,
                 voiceChannel,
                 voiceChannel.guild.id,
-                msg => interaction.editReply(msg)
+                msg => interaction.editReply(msg),
+                interaction.user.username
             );
         } catch (err: any) {
             console.error(err);
@@ -947,7 +957,7 @@ client.on(Events.InteractionCreate, async interaction  => {
     else if (interaction.commandName === 'clearqueue') {
         const gid = interaction.guild?.id;
         if (gid) {
-            queues.set(guildId, []);
+            queues.set(gid, []);
             await interaction.reply('🗑️  Cleared the queue.');
         } else {
             await interaction.reply({ content: '⚠️  I can\'t determine the guild.', ephemeral: true });
@@ -1079,7 +1089,7 @@ export function stopPlayback(guildId: string): boolean {
     return false;
 }
 
-export async function addToQueue(guildId: string, url: string): Promise<boolean> {
+export async function addToQueue(guildId: string, url: string, requester?: string): Promise<boolean> {
     try {
         // Get existing queue or create new one
         let q = queues.get(guildId);
@@ -1101,7 +1111,7 @@ export async function addToQueue(guildId: string, url: string): Promise<boolean>
             }
 
             // Add all resolved tracks to the queue
-            q.push(...playable);
+            q.push(...playable.map(u => ({ url: u, requester: requester ?? 'Unknown' })));
 
             // Start playback if player is idle and a connection exists
             const player = getPlayer(guildId);
@@ -1116,14 +1126,14 @@ export async function addToQueue(guildId: string, url: string): Promise<boolean>
         }
 
         // Add first track to queue
-        q.push(first);
+        q.push({ url: first, requester: requester ?? 'Unknown' });
 
         // Process the rest of the tracks in the background if it's a playlist
         (async () => {
             const rest = await resolveTracks(url);
             // If rest contains first track, remove it to avoid duplication
             if (rest.length && rest[0] === first) rest.shift();
-            if (rest.length) q.push(...rest);
+            if (rest.length) q.push(...rest.map(u => ({ url: u, requester: requester ?? 'Unknown' })));
         })();
 
         // Start playback if nothing is playing

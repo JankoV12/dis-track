@@ -99,31 +99,29 @@ app.get<{ guildId: string }>('/api/queue/:guildId', async (req, res) => {
     try {
         // Use index to track position in queue
         const formattedQueuePromises = queue.map(async (track, index) => {
-            // If track is just a URL string
-            if (typeof track === 'string') {
-                try {
-                    const info = await playdl.video_info(track);
-                    const videoDetails = info.video_details;
+            const trackUrl = typeof track === 'string' ? track : track.url;
+            try {
+                const info = await playdl.video_info(trackUrl);
+                const videoDetails = info.video_details;
 
-                    return {
-                        id: index + 1, // Position in queue (starting at 1)
-                        title: videoDetails.title || 'Unknown Title',
-                        author: videoDetails.channel?.name || 'Unknown Artist',
-                        thumbnail: videoDetails.thumbnails[0]?.url || '',
-                        duration: videoDetails.durationInSec || 0,
-                        url: track
-                    };
-                } catch (err) {
-                    console.error(`Error fetching metadata for ${track}:`, err);
-                    return {
-                        id: index + 1, // Position in queue (starting at 1)
-                        title: 'Unknown Title',
-                        author: 'Unknown Artist',
-                        thumbnail: '',
-                        duration: 0,
-                        url: track
-                    };
-                }
+                return {
+                    id: index + 1, // Position in queue (starting at 1)
+                    title: videoDetails.title || 'Unknown Title',
+                    author: videoDetails.channel?.name || 'Unknown Artist',
+                    thumbnail: videoDetails.thumbnails[0]?.url || '',
+                    duration: videoDetails.durationInSec || 0,
+                    url: trackUrl
+                };
+            } catch (err) {
+                console.error(`Error fetching metadata for ${trackUrl}:`, err);
+                return {
+                    id: index + 1,
+                    title: 'Unknown Title',
+                    author: 'Unknown Artist',
+                    thumbnail: '',
+                    duration: 0,
+                    url: trackUrl
+                };
             }
         });
 
@@ -182,14 +180,15 @@ app.post<{ guildId: string }>('/api/controls/:guildId/stop', (req, res) => {
 
 app.post<{ guildId: string }>('/api/queue/:guildId', async (req, res) => {
     const { guildId } = req.params;
-    const { url } = req.body;
+    const { url, requester } = req.body as { url?: string; requester?: string };
 
     if (!url || typeof url !== 'string') {
-        return res.status(400).json({ success: false, message: 'Song URL is a required parameter' });
+        res.status(400).json({ success: false, message: 'Song URL is a required parameter' });
+        return;
     }
 
     try {
-        const success = addToQueue(guildId, url);
+        const success = await addToQueue(guildId, url, requester);
 
         if (success) {
             res.status(201).json({
