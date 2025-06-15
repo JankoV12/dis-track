@@ -235,7 +235,7 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/FailureResponse'
-  /api/queue/{guildId}/add:
+  /api/queue/{guildId}:
     post:
       summary: Add a song to the queue
       parameters:
@@ -260,7 +260,7 @@ paths:
               required:
                 - url
       responses:
-        '200':
+        '201':
           description: Song added to queue
           content:
             application/json:
@@ -308,18 +308,12 @@ components:
           type: boolean
         message:
           type: string
-        trackTitle:
+        url:
           type: string
-          nullable: true
-        tracksAdded:
-          type: integer
-          nullable: true
-        queueLength:
-          type: integer
-          nullable: true
       required:
         - success
         - message
+        - url
     QueueItem:
       type: object
       properties:
