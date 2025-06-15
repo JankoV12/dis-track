@@ -4,7 +4,7 @@
   "main": "src/bot.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/bot.ts",
-    "build": "tsc",
+    "build": "tsc && cp -R src/public dist/",
     "start": "node dist/bot.js",
     "register": "ts-node src/register.ts",
     "start:api": "ts-node --transpile-only src/API.ts"
