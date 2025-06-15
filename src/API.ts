@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
 import path from 'path';
+import axios from 'axios';
 import {
     getPlayerState,
     getCurrentTrack,
@@ -13,12 +14,58 @@ import {
 } from './bot';
 import playdl from 'play-dl';
 
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const BOT_TOKEN = process.env.DISCORD_TOKEN;
+
+if (!CLIENT_ID || !CLIENT_SECRET || !BOT_TOKEN) {
+    console.error('Discord credentials are not fully set');
+}
+
 const app = express();
 const PORT = process.env.API_PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, 'public')));
+
+app.post('/api/login', async (req, res) => {
+    const { code, redirectUri } = req.body as { code?: string; redirectUri?: string };
+    if (!code || !redirectUri) {
+        res.status(400).json({ error: 'Missing code or redirectUri' });
+        return;
+    }
+    try {
+        const body = new URLSearchParams({
+            client_id: CLIENT_ID!,
+            client_secret: CLIENT_SECRET!,
+            grant_type: 'authorization_code',
+            code,
+            redirect_uri: redirectUri
+        });
+
+        const r = await axios.post('https://discord.com/api/v10/oauth2/token', body.toString(), {
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }
+        });
+        res.json(r.data);
+    } catch (err: any) {
+        console.error(err?.response?.data || err.message);
+        res.status(500).json({ error: 'Failed to exchange code' });
+    }
+});
+
+app.get('/api/bot/guilds', async (_req, res) => {
+    try {
+        const r = await axios.get('https://discord.com/api/v10/users/@me/guilds', {
+            headers: { Authorization: `Bot ${BOT_TOKEN}` }
+        });
+        res.json(r.data);
+    } catch (err: any) {
+        console.error(err?.response?.data || err.message);
+        res.status(500).json({ error: 'Failed to fetch guilds' });
+    }
+});
 
 app.get('/api/status', (req, res) => {
     res.json({
