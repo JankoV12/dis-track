@@ -1,0 +1,295 @@
+openapi: 3.0.0
+info:
+  title: DisTrack API
+  version: 1.0.0
+servers:
+  - url: http://localhost:3000
+paths:
+  /api/login:
+    post:
+      summary: Exchange a Discord OAuth2 code for tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                code:
+                  type: string
+                redirectUri:
+                  type: string
+              required:
+                - code
+                - redirectUri
+      responses:
+        '200':
+          description: OAuth2 tokens returned from Discord
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          description: Missing parameters
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+        '500':
+          description: Failed to exchange code
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/bot/guilds:
+    get:
+      summary: Get guilds the bot is in
+      responses:
+        '200':
+          description: List of guilds
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+        '500':
+          description: Failed to fetch guilds
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/status:
+    get:
+      summary: Get status of the bot player
+      responses:
+        '200':
+          description: Current status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  player:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                      connections:
+                        type: array
+                        items:
+                          type: string
+  /api/now-playing/{guildId}:
+    get:
+      summary: Get the currently playing track for a guild
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Current track metadata
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrackMetadata'
+        '404':
+          description: No track currently playing
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/queue/{guildId}:
+    get:
+      summary: Get the current queue for a guild
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Queue information
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  count:
+                    type: integer
+                  tracks:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/QueueItem'
+        '500':
+          description: Failed to process queue data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+  /api/controls/{guildId}/pause:
+    post:
+      summary: Pause playback
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Playback paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Failed to pause playback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+  /api/controls/{guildId}/resume:
+    post:
+      summary: Resume playback
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Playback resumed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Failed to resume playback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+  /api/controls/{guildId}/skip:
+    post:
+      summary: Skip the current track
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Track skipped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Failed to skip track
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+  /api/controls/{guildId}/stop:
+    post:
+      summary: Stop playback and clear the queue
+      parameters:
+        - in: path
+          name: guildId
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Playback stopped
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Failed to stop playback
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FailureResponse'
+components:
+  schemas:
+    TrackMetadata:
+      type: object
+      properties:
+        url:
+          type: string
+        title:
+          type: string
+        artist:
+          type: string
+        duration:
+          type: string
+        requester:
+          type: string
+        thumbnail:
+          type: string
+      required:
+        - url
+        - title
+        - artist
+        - duration
+        - requester
+    QueueItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        author:
+          type: string
+        thumbnail:
+          type: string
+        duration:
+          type: integer
+        url:
+          type: string
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message
+    FailureResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+      required:
+        - success
+        - message

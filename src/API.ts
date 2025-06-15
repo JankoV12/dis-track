@@ -3,6 +3,9 @@ import cors from 'cors';
 import 'dotenv/config';
 import path from 'path';
 import axios from 'axios';
+import swaggerUi from 'swagger-ui-express';
+import fs from 'fs';
+import yaml from 'js-yaml';
 import {
     getPlayerState,
     getCurrentTrack,
@@ -25,10 +28,14 @@ if (!CLIENT_ID || !CLIENT_SECRET || !BOT_TOKEN) {
 const app = express();
 const PORT = process.env.API_PORT || 3000;
 
+// Load OpenAPI spec
+const swaggerPath = path.join(__dirname, '..', 'openapi.yaml');
+const swaggerDocument = yaml.load(fs.readFileSync(swaggerPath, 'utf8')) as object;
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(express.static(path.join(__dirname, 'public')));
+app.use('/test', express.static(path.join(__dirname, 'public')));
 
 app.post('/api/login', async (req, res) => {
     const { code, redirectUri } = req.body as { code?: string; redirectUri?: string };
@@ -172,9 +179,9 @@ app.post<{ guildId: string }>('/api/controls/:guildId/stop', (req, res) => {
     }
 });
 
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'testsite.html'));
-});
+
+// Serve Swagger UI at the API root
+app.use('/', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 app.listen(PORT, () => {
     console.log(`🚀 API Server running on port ${PORT}`);
