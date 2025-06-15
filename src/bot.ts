@@ -53,6 +53,15 @@ interface QueueItem {
     requester?: string;
 }
 
+interface CachedTrackInfo {
+    title: string;
+    author: string;
+    thumbnail?: string;
+    duration?: string;
+}
+
+const trackInfoCache = new Map<string, CachedTrackInfo>();
+
 // Map of currently playing tracks, used for slash command responses
 const nowPlayingMessages = new Map<string, { message: import('discord.js').Message | null, interaction: import('discord.js').CommandInteraction | null }>();
 const queues: Map<string, QueueItem[]> = new Map();
@@ -63,6 +72,43 @@ const players: Map<string, import('@discordjs/voice').AudioPlayer> = new Map();
  * It’s just a function that sends a string somewhere (message.reply, interaction.editReply, etc.).
  */
 type Responder = (content: string) => Promise<any>;
+
+async function getCachedTrackInfo(url: string): Promise<CachedTrackInfo> {
+    const cached = trackInfoCache.get(url);
+    if (cached) {
+        return cached;
+    }
+    try {
+        if (/open\.spotify\.com/.test(url)) {
+            const sp: any = await playdl.spotify(url);
+            const info = {
+                title: sp.name as string || 'Unknown',
+                author: Array.isArray(sp.artists)
+                    ? sp.artists.map((a: any) => a.name ?? a).join(', ')
+                    : 'Unknown',
+                thumbnail: sp.thumbnail?.url as string | undefined,
+                duration: sp.durationRaw as string | undefined
+            };
+            trackInfoCache.set(url, info);
+            return info;
+        } else {
+            const vid = await playdl.video_basic_info(url);
+            const info = {
+                title: vid.video_details.title || 'Unknown',
+                author: vid.video_details.channel?.name || 'Unknown',
+                thumbnail: vid.video_details.thumbnails[0]?.url,
+                duration: vid.video_details.durationRaw
+            };
+            trackInfoCache.set(url, info);
+            return info;
+        }
+    } catch (err) {
+        console.error(`Error fetching metadata for ${url}:`, err);
+        const info = { title: url, author: '' };
+        trackInfoCache.set(url, info);
+        return info;
+    }
+}
 
 function getPlayer(guildId: string): import('@discordjs/voice').AudioPlayer {
     let player = players.get(guildId);
@@ -184,21 +230,14 @@ async function processPlayRequest(
         };
         currentTracks.set(guildId, metadata);
 
-    // Load metadata
+    // Load metadata with caching
         (async () => {
             try {
-                if (/open\.spotify\.com/.test(first)) {
-                    const sp: any = await playdl.spotify(first);
-                    metadata.title = sp.name;
-                    metadata.artist = sp.artists?.map((a: any) => a.name).join(', ');
-                    metadata.thumbnail = sp.thumbnail?.url;
-                } else {
-                    const info = await playdl.video_basic_info(first);
-                    metadata.title = info.video_details.title || 'Unknown';
-                    metadata.artist = info.video_details.channel?.name || 'Unknown';
-                    metadata.duration = info.video_details.durationRaw || 'Unknown';
-                    metadata.thumbnail = info.video_details.thumbnails[0]?.url || undefined;
-                }
+                const info = await getCachedTrackInfo(first);
+                metadata.title = info.title;
+                metadata.artist = info.author;
+                if (info.thumbnail) metadata.thumbnail = info.thumbnail;
+                if (info.duration) metadata.duration = info.duration;
             } catch (err: any) {
                 console.error('Failed to load track metadata:', err);
             }
@@ -222,22 +261,12 @@ async function formatQueue(guildId: string): Promise<string> {
     for (let i = 0; i < Math.min(q.length, 20); i++) {
         const item = q[i];
         const url = item.url;
-        let title = url;
-        let author = '';
         try {
-            if (/open\.spotify\.com/.test(url)) {
-                const sp: any = await playdl.spotify(url);
-                title = sp.name;
-                author = Array.isArray(sp.artists) ? sp.artists.map((a: any) => a.name ?? a).join(', ') : '';
-            } else {
-                const info = await playdl.video_basic_info(url);
-                title = info.video_details.title || '';
-                author = info.video_details.channel?.name || '';
-            }
+            const info = await getCachedTrackInfo(url);
+            lines.push(`${i + 1}. **${info.title}** by ${info.author}\n\`${url}\``);
         } catch {
-            // leave title as URL on error
+            lines.push(`${i + 1}. \`${url}\``);
         }
-        lines.push(`${i + 1}. **${title}** by ${author}\n\`${url}\``);
     }
     if (q.length > 20) {
         lines.push(`…and ${q.length - 20} more`);
@@ -455,18 +484,11 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
 // Helper to load metadata asynchronously
 async function loadTrackMetadata(url: string, metadata: TrackMetadata, guildId: string): Promise<void> {
     try {
-        if (/open\.spotify\.com/.test(url)) {
-            const sp: any = await playdl.spotify(url);
-            metadata.title = sp.name;
-            metadata.artist = sp.artists?.map((a: any) => a.name).join(', ');
-            metadata.thumbnail = sp.thumbnail?.url;
-        } else {
-            const info = await playdl.video_basic_info(url);
-            metadata.title = info.video_details.title || 'Unknown';
-            metadata.artist = info.video_details.channel?.name || 'Unknown';
-            metadata.duration = info.video_details.durationRaw || 'Unknown';
-            metadata.thumbnail = info.video_details.thumbnails[0]?.url || undefined;
-        }
+        const info = await getCachedTrackInfo(url);
+        metadata.title = info.title;
+        metadata.artist = info.author;
+        if (info.thumbnail) metadata.thumbnail = info.thumbnail;
+        if (info.duration) metadata.duration = info.duration;
 
         // Update embed with new metadata
         void updateNowPlayingEmbed(guildId);

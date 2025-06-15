@@ -18,6 +18,15 @@ import {
 } from './bot';
 import playdl from 'play-dl';
 
+interface CachedTrackInfo {
+    title: string;
+    author: string;
+    thumbnail: string;
+    duration: number;
+}
+
+const trackInfoCache = new Map<string, CachedTrackInfo>();
+
 const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const BOT_TOKEN = process.env.DISCORD_TOKEN;
@@ -100,29 +109,34 @@ app.get<{ guildId: string }>('/api/queue/:guildId', async (req, res) => {
         // Use index to track position in queue
         const formattedQueuePromises = queue.map(async (track, index) => {
             const trackUrl = typeof track === 'string' ? track : track.url;
-            try {
-                const info = await playdl.video_info(trackUrl);
-                const videoDetails = info.video_details;
-
-                return {
-                    id: index + 1, // Position in queue (starting at 1)
-                    title: videoDetails.title || 'Unknown Title',
-                    author: videoDetails.channel?.name || 'Unknown Artist',
-                    thumbnail: videoDetails.thumbnails[0]?.url || '',
-                    duration: videoDetails.durationInSec || 0,
-                    url: trackUrl
-                };
-            } catch (err) {
-                console.error(`Error fetching metadata for ${trackUrl}:`, err);
-                return {
-                    id: index + 1,
-                    title: 'Unknown Title',
-                    author: 'Unknown Artist',
-                    thumbnail: '',
-                    duration: 0,
-                    url: trackUrl
-                };
+            let info = trackInfoCache.get(trackUrl);
+            if (!info) {
+                try {
+                    const fetched = await playdl.video_info(trackUrl);
+                    const video = fetched.video_details;
+                    info = {
+                        title: video.title || 'Unknown Title',
+                        author: video.channel?.name || 'Unknown Artist',
+                        thumbnail: video.thumbnails[0]?.url || '',
+                        duration: video.durationInSec || 0
+                    };
+                    trackInfoCache.set(trackUrl, info);
+                } catch (err) {
+                    console.error(`Error fetching metadata for ${trackUrl}:`, err);
+                    info = {
+                        title: 'Unknown Title',
+                        author: 'Unknown Artist',
+                        thumbnail: '',
+                        duration: 0
+                    };
+                }
             }
+
+            return {
+                id: index + 1,
+                ...info,
+                url: trackUrl
+            };
         });
 
         // Wait for all metadata to be fetched
