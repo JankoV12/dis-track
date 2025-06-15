@@ -147,7 +147,7 @@ function getPlayer(guildId: string): import('@discordjs/voice').AudioPlayer {
  * Handles: resolving the URL, queueing, connecting, and optionally starting playback.
  * Re‑used by both the text‑prefix (`!play`) and slash (`/play`) commands so the behaviour is identical.
  */
-async function processPlayRequest(
+export async function processPlayRequest(
     url: string,
     voiceChannel: Exclude<import('discord.js').GuildMember['voice']['channel'], null>,
     guildId: string,
@@ -497,7 +497,7 @@ async function loadTrackMetadata(url: string, metadata: TrackMetadata, guildId: 
     }
 }
 
-const client = new Client({
+export const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,          // required for slash‑command interactions
         GatewayIntentBits.GuildMessages,   // read messages (for prefix cmds)
