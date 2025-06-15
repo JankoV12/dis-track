@@ -7,7 +7,7 @@
     "build": "tsc",
     "start": "node dist/bot.js",
     "register": "ts-node src/register.ts",
-    "start:api": "ts-node --transpile-only src/api.ts"
+    "start:api": "ts-node --transpile-only src/API.ts"
   },
   "keywords": [],
   "author": "",
