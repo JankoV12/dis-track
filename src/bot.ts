@@ -11,13 +11,16 @@ import {
 import playdl from 'play-dl';
 import ytdl from '@distube/ytdl-core';
 
+// Optional debug flag to log skipped tracks
+const LOG_SKIPPED_TRACKS = process.env.LOG_SKIPPED_TRACKS === 'true';
+
 // Try to authorise Spotify access for play‑dl
 if (process.env.SPOTIFY_CLIENT_ID && process.env.SPOTIFY_CLIENT_SECRET) {
     playdl.setToken({
         spotify: {
             client_id: process.env.SPOTIFY_CLIENT_ID,
             client_secret: process.env.SPOTIFY_CLIENT_SECRET,
-            refresh_token: process.env.SPOTIFY_REFRESH_TOKEN ?? undefined,
+            refresh_token: process.env.SPOTIFY_REFRESH_TOKEN as any,
             market: 'US'
         }
     });
@@ -77,7 +80,7 @@ async function processPlayRequest(
 
         // ensure / reuse a voice connection then start playback
         let connection =
-            player.subscribers.find(sub => sub.connection?.joinConfig.guildId === guildId)?.connection;
+            (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === guildId)?.connection;
         if (!connection) {
             connection = joinVoiceChannel({
                 channelId: voiceChannel.id,
@@ -108,7 +111,7 @@ async function processPlayRequest(
     })();
 
     const existingConn =
-        player.subscribers.find(sub => sub.connection?.joinConfig.guildId === guildId)?.connection;
+        (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === guildId)?.connection;
 
     if (player.state.status === AudioPlayerStatus.Idle || !existingConn) {
         let connection = existingConn;
@@ -139,18 +142,18 @@ async function processPlayRequest(
         (async () => {
             try {
                 if (/open\.spotify\.com/.test(first)) {
-                    const sp = await playdl.spotify(first);
+                    const sp: any = await playdl.spotify(first);
                     metadata.title = sp.name;
-                    metadata.artist = sp.artists.map(a => a.name).join(', ');
+                    metadata.artist = sp.artists?.map((a: any) => a.name).join(', ');
                     metadata.thumbnail = sp.thumbnail?.url;
                 } else {
                     const info = await playdl.video_basic_info(first);
-                    metadata.title = info.video_details.title;
+                    metadata.title = info.video_details.title || 'Unknown';
                     metadata.artist = info.video_details.channel?.name || 'Unknown';
-                    metadata.duration = info.video_details.durationRaw;
-                    metadata.thumbnail = info.video_details.thumbnails[0]?.url;
+                    metadata.duration = info.video_details.durationRaw || 'Unknown';
+                    metadata.thumbnail = info.video_details.thumbnails[0]?.url || undefined;
                 }
-            } catch (err) {
+            } catch (err: any) {
                 console.error('Failed to load track metadata:', err);
             }
         })();
@@ -176,13 +179,13 @@ async function formatQueue(guildId: string): Promise<string> {
         let author = '';
         try {
             if (/open\.spotify\.com/.test(url)) {
-                const sp = await playdl.spotify(url);
+                const sp: any = await playdl.spotify(url);
                 title = sp.name;
-                author = sp.artists.join(', ');
+                author = Array.isArray(sp.artists) ? sp.artists.map((a: any) => a.name ?? a).join(', ') : '';
             } else {
                 const info = await playdl.video_basic_info(url);
-                title = info.video_details.title;
-                author = info.video_details.author?.name || '';
+                title = info.video_details.title || '';
+                author = info.video_details.channel?.name || '';
             }
         } catch {
             // leave title as URL on error
@@ -218,13 +221,13 @@ async function resolveFirstTrack(url: string): Promise<string | null> {
     // Spotify
     if (/open\.spotify\.com/.test(url)) {
         try {
-            const sp = await playdl.spotify(url);
+            const sp: any = await playdl.spotify(url);
             if (sp.type === 'track') {
                 const sr = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
                 return sr.length ? sr[0].url : null;
             }
             // playlist / album – just use the first already‑present track blob
-            const firstTrack = sp.tracks[0] ?? null;
+            const firstTrack = sp.tracks?.[0] ?? null;
             if (firstTrack) {
                 const sr = await playdl.search(`${firstTrack.name} ${firstTrack.artists[0].name}`, { limit: 1 });
                 return sr.length ? sr[0].url : null;
@@ -253,7 +256,7 @@ async function resolveTracks(url: string): Promise<string[]> {
             // pull every video URL in order
             const vids = await pl.all_videos();
             return vids.map(v => v.url);
-        } catch (err) {
+        } catch (err: any) {
             console.error('YouTube playlist resolve error:', err);
             return [];
         }
@@ -265,13 +268,13 @@ async function resolveTracks(url: string): Promise<string[]> {
     // Spotify handling
     if (/open\.spotify\.com/.test(url)) {
         try {
-            const sp = await playdl.spotify(url);
+            const sp: any = await playdl.spotify(url);
             // Single track
             if (sp.type === 'track') {
                 try {
-                    const search = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
+                const search = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
                     return search.length ? [search[0].url] : [];
-                } catch (err) {
+                } catch (err: any) {
                     console.error('Track search failed, skipping:', sp.name, err);
                     return [];
                 }
@@ -281,9 +284,9 @@ async function resolveTracks(url: string): Promise<string[]> {
                 // Load the playlist lazily: just queue the raw Spotify URLs.
                 // They will be resolved to YouTube one‑by‑one in createResource().
                 const all = await sp.all_tracks();
-                return all.map(t => t.url as string).filter(Boolean);
+                return all.map((t: any) => t.url as string).filter(Boolean);
             }
-        } catch (err) {
+        } catch (err: any) {
             console.error('Spotify resolve error:', err);
         }
         return [];
@@ -298,7 +301,7 @@ async function createResource(url: string) {
     // Never stream directly from Spotify; instead search YouTube/SoundCloud
     if (/open\.spotify\.com/.test(url)) {
         try {
-            const sp = await playdl.spotify(url);
+            const sp: any = await playdl.spotify(url);
             const sr = await playdl.search(`${sp.name} ${sp.artists[0].name}`, { limit: 1 });
             if (sr.length) {
                 // recursively create a resource from the fallback URL
@@ -325,7 +328,7 @@ async function createResource(url: string) {
 async function safeCreateResource(url: string) {
     try {
         return await createResource(url);
-    } catch (error) {
+    } catch (error: any) {
         // Check if it's a 404 error
         if (error.message && error.message.includes('404')) {
             console.log(`⚠️ Resource not found (404): ${url}`);
@@ -351,7 +354,7 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
     let retryCount = 0;
     const maxRetries = 3;
 
-    while (q.length && retryCount < maxRetries) {
+    while (q.length) {
         const nextUrl = q.shift()!;
         try {
             const resource = await safeCreateResource(nextUrl);
@@ -373,20 +376,27 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
 
             player.play(resource);
             return; // success
-        } catch (err) {
+        } catch (err: any) {
             if (err.message === 'RESOURCE_NOT_FOUND') {
                 console.log(`⤼ Track unavailable (404), skipping: ${nextUrl}`);
                 retryCount = 0; // Reset retry count for new URL
             } else {
                 console.error('⤼ Failed to play track, skipping:', nextUrl, err);
+                if (LOG_SKIPPED_TRACKS) {
+                    console.log(`Skipped track due to error: ${nextUrl}`);
+                }
                 retryCount++;
+                if (retryCount >= maxRetries) {
+                    console.error(`❌ Reached ${maxRetries} consecutive failures. Continuing queue.`);
+                    retryCount = 0;
+                }
             }
         }
     }
 
-    // No playable tracks remain or max retries reached
-    if (retryCount >= maxRetries) {
-        console.error(`❌ Failed to play any tracks after ${maxRetries} attempts`);
+    // No playable tracks remain
+    if (retryCount > 0) {
+        console.error(`❌ Failed to play any tracks after scanning the queue.`);
     }
 
     updateEmbedToStopped(guildId);
@@ -397,21 +407,21 @@ async function playFromQueue(connection: import('@discordjs/voice').VoiceConnect
 async function loadTrackMetadata(url: string, metadata: TrackMetadata, guildId: string): Promise<void> {
     try {
         if (/open\.spotify\.com/.test(url)) {
-            const sp = await playdl.spotify(url);
+            const sp: any = await playdl.spotify(url);
             metadata.title = sp.name;
-            metadata.artist = sp.artists.map(a => a.name).join(', ');
+            metadata.artist = sp.artists?.map((a: any) => a.name).join(', ');
             metadata.thumbnail = sp.thumbnail?.url;
         } else {
             const info = await playdl.video_basic_info(url);
-            metadata.title = info.video_details.title;
+            metadata.title = info.video_details.title || 'Unknown';
             metadata.artist = info.video_details.channel?.name || 'Unknown';
-            metadata.duration = info.video_details.durationRaw;
-            metadata.thumbnail = info.video_details.thumbnails[0]?.url;
+            metadata.duration = info.video_details.durationRaw || 'Unknown';
+            metadata.thumbnail = info.video_details.thumbnails[0]?.url || undefined;
         }
 
         // Update embed with new metadata
         void updateNowPlayingEmbed(guildId);
-    } catch (err) {
+    } catch (err: any) {
         console.error('Failed to load track metadata:', err);
     }
 }
@@ -428,7 +438,8 @@ const client = new Client({
 const player = createAudioPlayer();
 
 player.on(AudioPlayerStatus.Idle, () => {
-    const connection = getVoiceConnection();
+    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
+    const connection = guildId ? getVoiceConnection(guildId) : undefined;
     if (connection) {
         void playFromQueue(connection);
         // Start inactivity timer when queue is empty
@@ -444,7 +455,8 @@ player.on(AudioPlayerStatus.Idle, () => {
 });
 
 player.on(AudioPlayerStatus.Playing, () => {
-    const connection = getVoiceConnection();
+    const guildId = player.subscribers[0]?.connection?.joinConfig.guildId;
+    const connection = guildId ? getVoiceConnection(guildId) : undefined;
     if (connection) {
         // Cancel inactivity timer when playback starts
         cancelInactivityCheck(connection.joinConfig.guildId);
@@ -468,7 +480,7 @@ function getVoiceConnection(): import('@discordjs/voice').VoiceConnection | unde
     // First try: find connections that have our player subscribed
     try {
         // This is technically accessing a private property but it works
-        const connection = player.subscribers.find(sub => sub.connection)?.connection;
+        const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) return connection;
     } catch {
         // Fall through to alternative methods if the above fails
@@ -482,7 +494,7 @@ function getVoiceConnection(): import('@discordjs/voice').VoiceConnection | unde
 
     // Otherwise check which connection has a non-empty queue
     return connections.find(conn =>
-        queues.get(conn.joinConfig.guildId)?.length > 0 ||
+        (queues.get(conn.joinConfig.guildId)?.length ?? 0) > 0 ||
         currentTracks.has(conn.joinConfig.guildId)
     );
 }
@@ -497,7 +509,7 @@ client.on(Events.VoiceStateUpdate, (oldState, newState) => {
 
     // Check if bot is in a voice channel
     const botChannel = connection.joinConfig.channelId;
-    const botVoiceChannel = oldState.guild.channels.cache.get(botChannel) as import('discord.js').VoiceChannel;
+    const botVoiceChannel = oldState.guild.channels.cache.get(botChannel!) as import('discord.js').VoiceChannel;
 
     if (botVoiceChannel) {
         // Count members in the channel (excluding bots)
@@ -542,7 +554,7 @@ async function updateNowPlayingEmbed(guildId: string): Promise<void> {
                 components: [row]
             });
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error('Failed to update now playing embed:', error);
         // Remove reference if message was deleted
         nowPlayingMessages.delete(guildId);
@@ -624,7 +636,7 @@ async function NowPlayingEmbedHandler(guildId: string, interaction?: import('dis
             if (existing.message) {
                 await existing.message.delete().catch(() => {});
             }
-        } catch (error) {
+        } catch (error: any) {
             console.error('Failed to clean up old embed:', error);
         }
     }
@@ -644,6 +656,22 @@ async function NowPlayingEmbedHandler(guildId: string, interaction?: import('dis
         nowPlayingMessages.set(guildId, {
             message: null,
             interaction: interaction
+        });
+    } else {
+        const guild = client.guilds.cache.get(guildId);
+        if (!guild) return;
+
+        const channel = guild.systemChannel || guild.channels.cache.find(c => c.isTextBased());
+        if (!channel || !channel.isTextBased()) return;
+
+        const message = await channel.send({
+            embeds: [embed],
+            components: [row]
+        });
+
+        nowPlayingMessages.set(guildId, {
+            message,
+            interaction: null
         });
     }
 }
@@ -681,7 +709,7 @@ function updateEmbedToStopped(guildId: string): void {
                 components: [row]
             });
         }
-    } catch (error) {
+    } catch (error: any) {
         console.error('Failed to update stopped embed:', error);
         nowPlayingMessages.delete(guildId);
     }
@@ -752,10 +780,10 @@ client.on(Events.MessageCreate, async message => {
                 voiceChannel.guild.id,
                 msg => message.reply(msg)
             );
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
             await message.reply('⚠️  Skipping unplayable track.');
-            const conn = player.subscribers.find(sub => sub.connection?.joinConfig.guildId === message.guild?.id)?.connection;
+            const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === message.guild?.id)?.connection;
             if (conn) void playFromQueue(conn);
         }
     }
@@ -801,7 +829,7 @@ client.on(Events.MessageCreate, async message => {
         }
     }
     else if (message.content === '!stop') {
-        const connection = player.subscribers.find(sub => sub.connection)?.connection;
+        const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
             queues.set(guildId, []);
@@ -845,7 +873,7 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     else if (interaction.customId === 'music_stop') {
-        const connection = player.subscribers.find(sub => sub.connection)?.connection;
+        const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
             queues.set(guildId, []);
@@ -886,14 +914,14 @@ client.on(Events.InteractionCreate, async interaction  => {
                 voiceChannel.guild.id,
                 msg => interaction.editReply(msg)
             );
-        } catch (err) {
+        } catch (err: any) {
             console.error(err);
             if (interaction.replied || interaction.deferred) {
                 await interaction.editReply('⚠️  Skipping unplayable track.');
             } else {
                 await interaction.reply({ content: '⚠️  Skipping unplayable track.', flags: 1 << 6 });
             }
-            const conn = player.subscribers.find(sub => sub.connection?.joinConfig.guildId === interaction.guild?.id)?.connection;
+            const conn = (player as any).subscribers.find((sub: any) => sub.connection?.joinConfig.guildId === interaction.guild?.id)?.connection;
             if (conn) void playFromQueue(conn);
         }
     }
@@ -941,7 +969,7 @@ client.on(Events.InteractionCreate, async interaction  => {
         }
     }
     else if (interaction.commandName === 'stop') {
-        const connection = player.subscribers.find(sub => sub.connection)?.connection;
+        const connection = (player as any).subscribers.find((sub: any) => sub.connection)?.connection;
         if (connection) {
             const guildId = connection.joinConfig.guildId;
             queues.set(guildId, []);

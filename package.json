@@ -4,10 +4,10 @@
   "main": "src/bot.ts",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/bot.ts",
-    "build": "tsc",
+    "build": "tsc && cp -R src/public dist/",
     "start": "node dist/bot.js",
     "register": "ts-node src/register.ts",
-    "start:api": "ts-node --transpile-only src/api.ts"
+    "start:api": "ts-node --transpile-only src/API.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,7 +15,8 @@
   "description": "",
   "dependencies": {
     "@discordjs/voice": "^0.18.0",
-    "@distube/ytdl-core": "^4.16.10",
+    "@distube/ytdl-core": "^4.16.12",
+    "axios": "^1.10.0",
     "cors": "^2.8.5",
     "discord.js": "^14.19.3",
     "dotenv": "^16.5.0",
