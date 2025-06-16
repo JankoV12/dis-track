@@ -206,7 +206,7 @@ app.post<{ guildId: string }>('/api/queue/:guildId/add', async (req, res) => {
     try {
         const guild = await client.guilds.fetch(guildId);
         const member = await guild.members.fetch(requesterUId);
-        const voiceChannel = member.voice.channel;
+        const voiceChannel = guild.voiceStates.cache.get(requesterUId)?.channel || member.voice.channel;
 
         if (!voiceChannel) {
             res.status(400).json({ success: false, message: 'Requester is not in a voice channel' });
